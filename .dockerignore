@@ -1,0 +1,9 @@
+.git
+.gitignore
+*.md
+spec/
+*.o
+*.dwarf
+main
+nostr-relay
+setenv.sh

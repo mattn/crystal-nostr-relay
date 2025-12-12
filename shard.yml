@@ -1,0 +1,21 @@
+name: nostr-relay
+version: 0.1.0
+
+authors:
+  - Yasuhiro Matsumoto <mattn.jp@gmail.com>
+
+targets:
+  nostr-relay:
+    main: src/main.cr
+
+crystal: '>= 1.18.2'
+
+license: MIT
+
+dependencies:
+  pg:
+    github: will/crystal-pg
+    version: "~> 0.28"
+  db:
+    github: crystal-lang/crystal-db
+    version: "~> 0.12"
