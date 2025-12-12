@@ -79,8 +79,6 @@ end
 server = HTTP::Server.new([
   HTTP::ErrorHandler.new,
   HTTP::LogHandler.new,
-  RelayHandler.new,
-
   HTTP::WebSocketHandler.new() do |ws, ctx|
     client = Client.new(ws)
 
@@ -122,6 +120,7 @@ server = HTTP::Server.new([
       Log.info { "Client disconnected" }
     end
   end,
+  RelayHandler.new,
 ])
 
 address = server.bind_tcp "0.0.0.0", 8080
