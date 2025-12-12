@@ -111,7 +111,7 @@ module DB
       e_tags.each do |event_id|
         # Fetch target event to delete
         result = conn.query_one?(
-          "SELECT pubkey, kind, tags FROM event WHERE id = $1",
+          "SELECT pubkey, kind, tags::text FROM event WHERE id = $1",
           event_id,
           as: {String, Int32, String}
         )
