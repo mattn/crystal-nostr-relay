@@ -23,6 +23,7 @@ RUN shards install --production
 
 # Copy source code
 COPY src ./src
+COPY public ./public
 
 # Build static binary
 RUN crystal build src/main.cr \
@@ -32,16 +33,29 @@ RUN crystal build src/main.cr \
     -o nostr-relay
 
 # Runtime stage
-FROM scratch
+FROM alpine:latest
+
+WORKDIR /app
+
+# Run as non-root user
+RUN addgroup -g 1000 nostr && \
+    adduser -D -u 1000 -G nostr nostr && \
+    chown -R nostr:nostr /app
+
+USER nostr
 
 # Copy CA certificates for HTTPS
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the binary
-COPY --from=builder /build/nostr-relay /nostr-relay
+COPY --from=builder /build/nostr-relay /app/nostr-relay
+
+COPY --from=builder --chown=nostr:nostr /build/public /app/public
 
 # Expose WebSocket port
 EXPOSE 8080
 
+ENV DATABASE_URL="postgresql://user:password@localhost:5432/crystal-nostr-relay?auth_methods=cleartext"
+
 # Run as non-root (note: scratch doesn't have users, so we just set the binary)
-ENTRYPOINT ["/nostr-relay"]
+ENTRYPOINT ["./nostr-relay"]
