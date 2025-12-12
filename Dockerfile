@@ -55,6 +55,9 @@ COPY --from=builder --chown=nostr:nostr /build/public /app/public
 # Expose WebSocket port
 EXPOSE 8080
 
+ENV RELAY_NAME="Crystal Nostr Relay"
+ENV RELAY_DESCRIPTION="A lightweight Nostr relay implementation in Crystal"
+ENV RELAY_URL="ws://localhost:8080"
 ENV DATABASE_URL="postgresql://user:password@localhost:5432/crystal-nostr-relay?auth_methods=cleartext"
 
 # Run as non-root (note: scratch doesn't have users, so we just set the binary)

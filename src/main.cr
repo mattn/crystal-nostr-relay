@@ -76,50 +76,52 @@ class RelayHandler
   end
 end
 
+websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
+  client = Client.new(ws)
+
+  ws.on_message do |message|
+    begin
+      Log.info { "Received message: #{message}" }
+
+      data = Nostr.parse(message)
+      case data
+      when Nostr::EventMessage
+        if data.event.valid?
+          # Handle kind 5 (deletion) separately
+          if data.event.kind == 5
+            DB.delete_events(data.event)
+            ws.send %(["OK","#{data.event.id}",true,""])
+          else
+            DB.save(data.event)
+            ClientManager.broadcast(data.event)
+            ws.send %(["OK","#{data.event.id}",true,""])
+          end
+        else
+          ws.send %(["OK","#{data.event.id}",false,"invalid: ..."])
+        end
+      when Nostr::RequestMessage
+        client.subscribe(data.sub_id, data.filters)
+      when Nostr::CloseMessage
+        client.unsubscribe(data.sub_id)
+      else
+        raise "unknown message type: #{data}"
+      end
+    rescue error
+      Log.error { "Error processing message: #{error.message}" }
+      ws.send(["NOTICE", error.message].to_json)
+    end
+  end
+
+  ws.on_close do
+    client.close
+    Log.info { "Client disconnected" }
+  end
+end
+
 server = HTTP::Server.new([
   HTTP::ErrorHandler.new,
   HTTP::LogHandler.new,
-  HTTP::WebSocketHandler.new() do |ws, ctx|
-    client = Client.new(ws)
-
-    ws.on_message do |message|
-      begin
-        Log.info { "Received message: #{message}" }
-
-        data = Nostr.parse(message)
-        case data
-        when Nostr::EventMessage
-          if data.event.valid?
-            # Handle kind 5 (deletion) separately
-            if data.event.kind == 5
-              DB.delete_events(data.event)
-              ws.send %(["OK","#{data.event.id}",true,""])
-            else
-              DB.save(data.event)
-              ClientManager.broadcast(data.event)
-              ws.send %(["OK","#{data.event.id}",true,""])
-            end
-          else
-            ws.send %(["OK","#{data.event.id}",false,"invalid: ..."])
-          end
-        when Nostr::RequestMessage
-          client.subscribe(data.sub_id, data.filters)
-        when Nostr::CloseMessage
-          client.unsubscribe(data.sub_id)
-        else
-          raise "unknown message type: #{data}"
-        end
-      rescue error
-        Log.error { "Error processing message: #{error.message}" }
-        ws.send(["NOTICE", error.message].to_json)
-      end
-    end
-
-    ws.on_close do
-      client.close
-      Log.info { "Client disconnected" }
-    end
-  end,
+  websocket_handler,
   RelayHandler.new,
 ])
 
