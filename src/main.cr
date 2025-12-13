@@ -29,6 +29,9 @@ class RelayHandler
     # NIP-11: Return relay information if Accept header includes application/nostr+json
     accept = context.request.headers["Accept"]?
     if accept && accept.includes?("application/nostr+json")
+      context.response.headers["Access-Control-Allow-Origin"] = "*"
+      context.response.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept"
+      context.response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
       context.response.content_type = "application/nostr+json"
       context.response.print RELAY_INFO.to_json
       return
