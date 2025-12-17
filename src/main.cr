@@ -10,6 +10,7 @@ RELAY_INFO = {
   description: ENV["RELAY_DESCRIPTION"]? || "A Nostr relay written in Crystal",
   pubkey: ENV["RELAY_PUBKEY"]? || "",
   contact: ENV["RELAY_CONTACT"]? || "",
+  icon: ENV["RELAY_ICON"]? || "",
   supported_nips: [1, 9, 11, 16],
   software: "https://github.com/mattn/crystal-nostr-relay",
   version: "0.1.0",
