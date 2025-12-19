@@ -119,7 +119,7 @@ module DB
   # Helper method to validate public key format (32 bytes hex)
   private def self.valid_public_key?(pubkey : String) : Bool
     # Public keys should be 64 hex characters (32 bytes)
-    pubkey.size == 64 && pubkey.match?(/^[a-fA-F0-9]{64}$/)
+    pubkey.size == 64 && !!(pubkey =~ /^[a-fA-F0-9]{64}$/)
   end
 
   # NIP-09: Event deletion via kind 5

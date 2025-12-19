@@ -58,8 +58,8 @@ module Nostr
       expiration_tag = tags.find { |t| t.size >= 2 && t[0] == "expiration" }
       return nil unless expiration_tag
       begin
-        Int64.parse(expiration_tag[1])
-      rescue NumberFormatException
+        expiration_tag[1].to_i64
+      rescue ArgumentError
         nil
       end
     end
