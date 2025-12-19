@@ -60,6 +60,21 @@ module DB
       # NIP-40: Don't save already expired events
       return true if event.expired?
 
+      # NIP-02: Special validation for contact list (kind 3)
+      if event.kind == 3
+        # Validate that p-tags in contact list events have the correct format
+        # Format: ["p", <pubkey>, <relay-url>, <alias>] where relay-url and alias are optional
+        event.tags.each do |tag|
+          if tag[0]? == "p"
+            pubkey = tag[1]?
+            if !pubkey || !valid_public_key?(pubkey)
+              Log.warn { "Invalid contact list event: p-tag has invalid pubkey format" }
+              return false # Reject the entire contact list event if it has invalid p-tags
+            end
+          end
+        end
+      end
+
       # For replaceable events, delete old events
       if event.replaceable?
         conn.exec(
@@ -101,6 +116,12 @@ module DB
     false
   end
 
+  # Helper method to validate public key format (32 bytes hex)
+  private def self.valid_public_key?(pubkey : String) : Bool
+    # Public keys should be 64 hex characters (32 bytes)
+    pubkey.size == 64 && pubkey.match?(/^[a-fA-F0-9]{64}$/)
+  end
+
   # NIP-09: Event deletion via kind 5
   def self.delete_events(deletion_event : Nostr::Event) : Bool
     return false unless deletion_event.kind == 5
@@ -118,7 +139,7 @@ module DB
           event_id,
           as: {String, Int32, String}
         )
-        
+
         next unless result
         target_pubkey, target_kind, target_tags_json = result
 
@@ -127,7 +148,7 @@ module DB
           # Extract p tags from kind 1059 event
           target_tags = Array(Array(String)).from_json(target_tags_json)
           p_tags = target_tags.select { |t| t.size >= 2 && t[0] == "p" }.map(&.[1])
-          
+
           # Delete only if deletion_event pubkey is in kind 1059's p-tags
           if p_tags.includes?(deletion_event.pubkey)
             conn.exec("DELETE FROM event WHERE id = $1", event_id)
