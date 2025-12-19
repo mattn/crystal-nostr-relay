@@ -50,15 +50,15 @@ module DB
   puts "Database setup completed successfully"
 
   # Save event
-  def self.save(event : Nostr::Event) : Bool
+  def self.save(event : Nostr::Event) : {Bool, String}
     POOL.transaction do |tx|
       conn = tx.connection
 
       # Don't save ephemeral events
-      return true if event.ephemeral?
+      return {true, ""} if event.ephemeral?
 
       # NIP-40: Don't save already expired events
-      return true if event.expired?
+      return {true, ""} if event.expired?
 
       # NIP-02: Special validation for contact list (kind 3)
       if event.kind == 3
@@ -69,10 +69,17 @@ module DB
             pubkey = tag[1]?
             if !pubkey || !valid_public_key?(pubkey)
               Log.warn { "Invalid contact list event: p-tag has invalid pubkey format" }
-              return false # Reject the entire contact list event if it has invalid p-tags
+              return {false, "invalid: contact list p-tag has invalid pubkey format"} # Reject the entire contact list event if it has invalid p-tags
             end
           end
         end
+      end
+
+      # NIP-70: Check if any tag name contains a hyphen
+      contains_hyphen_tag = event.tags.any? { |tag| tag[0]? && tag[0].includes?("-") }
+      if contains_hyphen_tag
+        # This event has tags with hyphens, return false to trigger auth-required message
+        return {false, "auth-required: this event may only be published by its author"}
       end
 
       # For replaceable events, delete old events
@@ -110,10 +117,10 @@ module DB
       )
     end
 
-    true
+    {true, ""}
   rescue ex
     Log.error { "DB save error: #{ex.message}" }
-    false
+    {false, "error: database error"}
   end
 
   # Helper method to validate public key format (32 bytes hex)

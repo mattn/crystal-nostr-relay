@@ -11,7 +11,7 @@ RELAY_INFO = {
   pubkey: ENV["RELAY_PUBKEY"]? || "",
   contact: ENV["RELAY_CONTACT"]? || "",
   icon: ENV["RELAY_ICON"]? || "",
-  supported_nips: [1, 2, 9, 11, 15, 16, 20, 33, 40, 45],
+  supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 28, 33, 40, 45, 65, 70],
   software: "https://github.com/mattn/crystal-nostr-relay",
   version: "0.1.0",
 }
@@ -96,12 +96,12 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
             DB.delete_events(data.event)
             ws.send %(["OK","#{data.event.id}",true,""])
           else
-            saved = DB.save(data.event)
+            saved, message = DB.save(data.event)
             if saved
               ClientManager.broadcast(data.event)
               ws.send %(["OK","#{data.event.id}",true,""])
             else
-              ws.send %(["OK","#{data.event.id}",false,"invalid: validation failed"])
+              ws.send %(["OK","#{data.event.id}",false,"#{message}"])
             end
           end
         else
