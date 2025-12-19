@@ -54,6 +54,22 @@ module Nostr
       tags.select { |t| t.size >= 2 && t[0] == "p" }.map(&.[1])
     end
 
+    def expiration_timestamp : Int64?
+      expiration_tag = tags.find { |t| t.size >= 2 && t[0] == "expiration" }
+      return nil unless expiration_tag
+      begin
+        Int64.parse(expiration_tag[1])
+      rescue NumberFormatException
+        nil
+      end
+    end
+
+    def expired? : Bool
+      exp_ts = expiration_timestamp
+      return false unless exp_ts
+      Time.utc.to_unix >= exp_ts
+    end
+
     private def compute_id : String
       data = [0i64, pubkey, created_at, kind, tags, content]
       Digest::SHA256.hexdigest(data.to_json)
@@ -119,10 +135,11 @@ module Nostr
 
   record EventMessage, event : Event
   record RequestMessage, sub_id : String, filters : Array(Filter)
+  record CountMessage, sub_id : String, filters : Array(Filter)
   record CloseMessage, sub_id : String
   record Subscription, sub_id : String, filters : Array(Filter), channel : Channel(Event), eose_channel : Channel(Nil)
 
-  alias RelayMessage = EventMessage | RequestMessage | CloseMessage | JSON::PullParser::Kind
+  alias RelayMessage = EventMessage | RequestMessage | CountMessage | CloseMessage | JSON::PullParser::Kind
 
   def self.parse(json : String) : RelayMessage
     pull = JSON::PullParser.new(json)
@@ -141,6 +158,14 @@ module Nostr
       end
       pull.read_end_array
       return RequestMessage.new(sub_id, filters)
+    when "COUNT"
+      sub_id = pull.read_string
+      filters = [] of Filter
+      while pull.kind != JSON::PullParser::Kind::EndArray
+        filters << Filter.from_json(pull.read_raw)
+      end
+      pull.read_end_array
+      return CountMessage.new(sub_id, filters)
     when "CLOSE"
       reason = pull.read_string
       pull.read_end_array

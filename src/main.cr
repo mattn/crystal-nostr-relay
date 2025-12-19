@@ -11,7 +11,7 @@ RELAY_INFO = {
   pubkey: ENV["RELAY_PUBKEY"]? || "",
   contact: ENV["RELAY_CONTACT"]? || "",
   icon: ENV["RELAY_ICON"]? || "",
-  supported_nips: [1, 9, 11, 16],
+  supported_nips: [1, 9, 11, 15, 16, 20, 33, 40, 45],
   software: "https://github.com/mattn/crystal-nostr-relay",
   version: "0.1.0",
 }
@@ -105,6 +105,9 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
         end
       when Nostr::RequestMessage
         client.subscribe(data.sub_id, data.filters)
+      when Nostr::CountMessage
+        count = DB.count(data.filters)
+        ws.send %(["COUNT","#{data.sub_id}",{"count":#{count}}])
       when Nostr::CloseMessage
         client.unsubscribe(data.sub_id)
       else

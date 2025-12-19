@@ -53,9 +53,12 @@ module DB
   def self.save(event : Nostr::Event) : Bool
     POOL.transaction do |tx|
       conn = tx.connection
-      
+
       # Don't save ephemeral events
       return true if event.ephemeral?
+
+      # NIP-40: Don't save already expired events
+      return true if event.expired?
 
       # For replaceable events, delete old events
       if event.replaceable?
@@ -158,10 +161,112 @@ module DB
       POOL.query(sql, args: args) do |rs|
         rs.each do
           event = Nostr::Event.from_json(rs.read(String))
-          yield event
+
+          # NIP-40: Don't include expired events
+          unless event.expired?
+            yield event
+          end
         end
       end
     end
+  end
+
+  # Count matched events
+  def self.count(filters : Array(Nostr::Filter)) : Int64
+    total = 0i64
+    # Match any filter (OR condition)
+    filters.each do |filter|
+      sql, args = build_count_query(filter)
+      result = POOL.query_one(sql, args: args, as: Int64)
+      total += result
+    end
+    total
+  end
+
+  # Build SQL query for counting
+  private def self.build_count_query(filter : Nostr::Filter) : {String, Array(::DB::Any)}
+    conditions = [] of String
+    args = [] of ::DB::Any
+    arg_counter = 0
+
+    # ids => id LIKE 'prefix%'
+    if ids = filter.ids
+      unless ids.empty?
+        placeholders = ids.map do |id|
+          args << "#{id}%"
+          "$#{arg_counter += 1}"
+        end.join(", ")
+        conditions << "id LIKE ANY (ARRAY[#{placeholders}])"
+      end
+    end
+
+    # authors => pubkey LIKE 'prefix%'
+    if authors = filter.authors
+      unless authors.empty?
+        placeholders = authors.map do |author|
+          args << "#{author}%"
+          "$#{arg_counter += 1}"
+        end.join(", ")
+        conditions << "pubkey LIKE ANY (ARRAY[#{placeholders}])"
+      end
+    end
+
+    # kinds => kind IN (...)
+    if kinds = filter.kinds
+      unless kinds.empty?
+        placeholders = kinds.map do |kind|
+          args << kind
+          "$#{arg_counter += 1}"
+        end.join(", ")
+        conditions << "kind IN (#{placeholders})"
+      end
+    end
+
+    # since / until
+    if since = filter.since
+      args << since
+      conditions << "created_at >= $#{arg_counter += 1}"
+    end
+
+    if until_ = filter.until_
+      args << until_
+      conditions << "created_at <= $#{arg_counter += 1}"
+    end
+
+    # #e and #p => tagvalues @> ARRAY[...]
+    {% for tag in ["e", "p"] %}
+      if values = filter.{{tag.id}}
+        unless values.empty?
+          placeholders = values.map do |v|
+            args << v
+            "$#{arg_counter += 1}"
+          end.join(", ")
+          conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+        end
+      end
+    {% end %}
+
+    # Arbitrary tags (#t, #r, #challenge, etc.)
+    filter.generic.each do |key, values|
+      next if values.empty?
+      placeholders = values.map do |v|
+        args << v
+        "$#{arg_counter += 1}"
+      end.join(", ")
+      conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+    end
+
+    # WHERE clause (default to true if empty)
+    where_clause = conditions.empty? ? "true" : conditions.join(" AND ")
+
+    # For counting, don't apply limit
+    sql = <<-SQL
+      SELECT COUNT(*)
+      FROM event e
+      WHERE #{where_clause}
+    SQL
+
+    {sql, args}
   end
 
   # Build SQL query for a single filter
