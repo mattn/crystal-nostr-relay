@@ -194,6 +194,7 @@ class Client
       sub.channel.close
       sub.eose_channel.close
     end
+    subscriptions.clear
     ClientManager.remove(self)
   end
 
@@ -221,7 +222,10 @@ class Client
           end
         end
         # All events sent to channel, signal EOSE
-        eose_channel.send(nil)
+        begin
+          eose_channel.send(nil)
+        rescue Channel::ClosedError
+        end
       rescue ex
         Log.error { "Subscribe query error: #{ex.message}" }
         Log.error { ex.backtrace.join("\n") }
@@ -244,6 +248,8 @@ class Client
     # Normal termination
   rescue ex
     Log.error { "Send event error: #{ex.message}" }
+  ensure
+    close
   end
 
   def unsubscribe(id : String)
@@ -255,8 +261,11 @@ class Client
 
   def broadcast_event(event : Nostr::Event)
     subscriptions.each_value do |sub|
-      if sub.filters.any?(&.matches?(event))
-        sub.channel.send(event)
+      next unless sub.filters.any?(&.matches?(event))
+      select
+      when sub.channel.send(event)
+      else
+        # Channel full, drop event for slow client
       end
     end
   end
@@ -277,6 +286,6 @@ module ClientManager
   end
 
   def self.broadcast(event : Nostr::Event)
-    @@clients.each { |c| spawn c.broadcast_event(event) }
+    @@clients.each { |c| c.broadcast_event(event) }
   end
 end
