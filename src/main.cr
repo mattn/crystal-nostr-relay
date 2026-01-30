@@ -84,6 +84,7 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
   client = Client.new(ws)
 
   ws.on_message do |message|
+    client.touch
     begin
       Log.info { "Received message: #{message}" }
 
@@ -123,6 +124,10 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
     end
   end
 
+  ws.on_pong do
+    client.touch
+  end
+
   ws.on_close do
     client.close
     Log.info { "Client disconnected" }
@@ -140,5 +145,7 @@ address = server.bind_tcp "0.0.0.0", 8080
 puts "Relay listening on ws://#{address}/"
 puts "NIP-11 info: http://#{address}/ (with Accept: application/nostr+json)"
 puts "Static files: http://#{address}/"
+
+ClientManager.start_reaper(Time::Span.new(minutes: 5))
 
 server.listen

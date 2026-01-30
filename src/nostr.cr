@@ -183,9 +183,19 @@ class Client
   getter ws : HTTP::WebSocket
   getter subscriptions = Hash(String, Nostr::Subscription).new
   @closed = Atomic(Int32).new(0)
+  @last_seen : Time
 
   def initialize(@ws)
+    @last_seen = Time.utc
     ClientManager.add(self)
+  end
+
+  def touch
+    @last_seen = Time.utc
+  end
+
+  def alive?(timeout : Time::Span) : Bool
+    Time.utc - @last_seen < timeout
   end
 
   def close
@@ -248,8 +258,6 @@ class Client
     # Normal termination
   rescue ex
     Log.error { "Send event error: #{ex.message}" }
-  ensure
-    close
   end
 
   def unsubscribe(id : String)
@@ -276,16 +284,45 @@ end
 # ------------------------------
 module ClientManager
   @@clients = [] of Client
+  @@mutex = Mutex.new
 
   def self.add(client : Client)
-    @@clients << client
+    @@mutex.synchronize { @@clients << client }
   end
 
   def self.remove(client : Client)
-    @@clients.delete(client)
+    @@mutex.synchronize { @@clients.delete(client) }
   end
 
   def self.broadcast(event : Nostr::Event)
-    @@clients.each { |c| c.broadcast_event(event) }
+    clients_copy = @@mutex.synchronize { @@clients.dup }
+    clients_copy.each { |c| c.broadcast_event(event) }
+  end
+
+  def self.start_reaper(timeout : Time::Span)
+    spawn do
+      loop do
+        sleep timeout / 2
+
+        clients_to_reap = @@mutex.synchronize do
+          @@clients.reject(&.alive?(timeout))
+        end
+
+        clients_to_reap.each do |client|
+          Log.warn { "Client timed out. Closing connection." }
+          client.close
+        end
+
+        clients_to_ping = @@mutex.synchronize { @@clients.dup }
+        clients_to_ping.each do |client|
+          begin
+            client.ws.ping
+          rescue IO::Error
+            Log.warn { "Failed to send ping. Closing connection." }
+            client.close
+          end
+        end
+      end
+    end
   end
 end
