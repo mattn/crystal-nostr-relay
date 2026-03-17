@@ -244,18 +244,27 @@ class Client
   end
 
   private def send_events(sub : Nostr::Subscription)
+    eose_sent = false
     loop do
       break if @closed.get != 0
-      select
-      when event = sub.channel.receive
+      if eose_sent
+        event = sub.channel.receive
         ws.send %(["EVENT","#{sub.sub_id}",#{event.to_json}])
-      when sub.eose_channel.receive
-        ws.send %(["EOSE","#{sub.sub_id}"])
-        break
+      else
+        select
+        when event = sub.channel.receive
+          ws.send %(["EVENT","#{sub.sub_id}",#{event.to_json}])
+        when sub.eose_channel.receive
+          ws.send %(["EOSE","#{sub.sub_id}"])
+          eose_sent = true
+        end
       end
     end
   rescue Channel::ClosedError
-    # Normal termination
+    # Normal termination (subscription closed or client disconnected)
+  rescue ex : IO::Error
+    Log.warn { "WebSocket send error: #{ex.message}" }
+    close
   rescue ex
     Log.error { "Send event error: #{ex.message}" }
   end
@@ -273,7 +282,7 @@ class Client
       select
       when sub.channel.send(event)
       else
-        # Channel full, drop event for slow client
+        Log.warn { "Channel full for subscription #{sub.sub_id}, dropping event #{event.id}" }
       end
     end
   end
