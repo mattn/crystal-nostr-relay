@@ -12,6 +12,7 @@ RELAY_INFO = {
   contact: ENV["RELAY_CONTACT"]? || "",
   icon: ENV["RELAY_ICON"]? || "",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 28, 33, 40, 45, 65, 70],
+  relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
   software: "https://github.com/mattn/crystal-nostr-relay",
   version: "0.1.0",
 }
