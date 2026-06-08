@@ -6,15 +6,15 @@ require "./nostr"
 
 # NIP-11 Relay Information
 RELAY_INFO = {
-  name: ENV["RELAY_NAME"]? || "Crystal Nostr Relay",
-  description: ENV["RELAY_DESCRIPTION"]? || "A Nostr relay written in Crystal",
-  pubkey: ENV["RELAY_PUBKEY"]? || "",
-  contact: ENV["RELAY_CONTACT"]? || "",
-  icon: ENV["RELAY_ICON"]? || "",
-  supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 28, 33, 40, 45, 65, 70],
+  name:            ENV["RELAY_NAME"]? || "Crystal Nostr Relay",
+  description:     ENV["RELAY_DESCRIPTION"]? || "A Nostr relay written in Crystal",
+  pubkey:          ENV["RELAY_PUBKEY"]? || "",
+  contact:         ENV["RELAY_CONTACT"]? || "",
+  icon:            ENV["RELAY_ICON"]? || "",
+  supported_nips:  [1, 2, 4, 9, 11, 12, 15, 16, 20, 28, 33, 40, 45, 65, 70],
   relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
-  software: "https://github.com/mattn/crystal-nostr-relay",
-  version: "0.1.0",
+  software:        "https://github.com/mattn/crystal-nostr-relay",
+  version:         "0.1.0",
 }
 
 # HTTP Handler for NIP-11 and static files
@@ -42,9 +42,9 @@ class RelayHandler
     # Serve static files
     path = context.request.path
     path = "/index.html" if path == "/"
-    
+
     file_path = File.join("public", path)
-    
+
     if File.file?(file_path)
       context.response.content_type = mime_type(file_path)
       context.response.print File.read(file_path)
@@ -81,13 +81,33 @@ class RelayHandler
   end
 end
 
+# Extract the real client IP from proxy headers (e.g. Cloudflare Tunnel /
+# reverse proxy). Falls back to the peer address, or "-" when unknown.
+def extract_forwarded_ip(request) : String
+  {"cf-connecting-ip", "x-forwarded-for", "x-real-ip"}.each do |name|
+    value = request.headers[name]?
+    next if value.nil? || value.empty?
+    # X-Forwarded-For may be a comma separated list; take the first entry.
+    return value.split(',').first.strip
+  end
+  if peer = request.remote_address
+    peer.is_a?(Socket::IPAddress) ? peer.address : peer.to_s
+  else
+    "-"
+  end
+rescue
+  "-"
+end
+
 websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
   client = Client.new(ws)
+  client_ip = extract_forwarded_ip(ctx.request)
+  Log.info { "[#{client_ip}] Client connected" }
 
   ws.on_message do |message|
     client.touch
     begin
-      Log.info { "Received message: #{message}" }
+      Log.info { "[#{client_ip}] Received message: #{message}" }
 
       data = Nostr.parse(message)
       case data
@@ -120,7 +140,7 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
         raise "unknown message type: #{data}"
       end
     rescue error
-      Log.error { "Error processing message: #{error.message}" }
+      Log.error { "[#{client_ip}] Error processing message: #{error.message}" }
       ws.send(["NOTICE", error.message].to_json)
     end
   end
@@ -131,7 +151,7 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
 
   ws.on_close do
     client.close
-    Log.info { "Client disconnected" }
+    Log.info { "[#{client_ip}] Client disconnected" }
   end
 end
 
