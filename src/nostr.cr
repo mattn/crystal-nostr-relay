@@ -4,6 +4,7 @@ require "json"
 require "digest/sha256"
 
 require "./db"
+require "./delegation"
 require "./schnorr"
 
 module Nostr
@@ -24,6 +25,11 @@ module Nostr
 
     def valid? : Bool
       id == compute_id && valid_signature?
+    end
+
+    # NIP-26: Delegated Event Signing
+    def valid_delegation? : Bool
+      Delegation.valid?(pubkey, kind, created_at, tags)
     end
 
     # NIP-01: Regular events: 1000 <= kind < 10000

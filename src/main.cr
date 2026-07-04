@@ -11,7 +11,7 @@ RELAY_INFO = {
   pubkey:          ENV["RELAY_PUBKEY"]? || "",
   contact:         ENV["RELAY_CONTACT"]? || "",
   icon:            ENV["RELAY_ICON"]? || "",
-  supported_nips:  [1, 2, 4, 9, 11, 12, 15, 16, 20, 28, 33, 40, 45, 65, 70],
+  supported_nips:  [1, 2, 4, 9, 11, 12, 15, 16, 20, 26, 28, 33, 40, 45, 65, 70],
   relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
   software:        "https://github.com/mattn/crystal-nostr-relay",
   version:         "0.1.0",
@@ -113,8 +113,11 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
       case data
       when Nostr::EventMessage
         if data.event.valid?
-          # Handle kind 5 (deletion) separately
-          if data.event.kind == 5
+          # NIP-26: reject events carrying an invalid delegation tag
+          if !data.event.valid_delegation?
+            ws.send %(["OK","#{data.event.id}",false,"invalid: delegation"])
+          elsif data.event.kind == 5
+            # Handle kind 5 (deletion) separately
             DB.delete_events(data.event)
             ws.send %(["OK","#{data.event.id}",true,""])
           else
