@@ -143,7 +143,29 @@ module Nostr
   record RequestMessage, sub_id : String, filters : Array(Filter)
   record CountMessage, sub_id : String, filters : Array(Filter)
   record CloseMessage, sub_id : String
-  record Subscription, sub_id : String, filters : Array(Filter), channel : Channel(Event), eose_channel : Channel(Nil)
+
+  class Subscription
+    getter sub_id : String
+    getter filters : Array(Filter)
+    getter channel : Channel(Event)
+    getter eose_channel : Channel(Nil)
+    getter cancel_channel = Channel(Nil).new
+    @cancelled = Atomic(Int32).new(0)
+
+    def initialize(@sub_id, @filters, @channel, @eose_channel)
+    end
+
+    def active? : Bool
+      @cancelled.get == 0
+    end
+
+    def cancel
+      return unless @cancelled.swap(1) == 0
+      channel.close
+      eose_channel.close
+      cancel_channel.close
+    end
+  end
 
   alias RelayMessage = EventMessage | RequestMessage | CountMessage | CloseMessage | JSON::PullParser::Kind
 
@@ -186,6 +208,10 @@ end
 # Client Class (registered to ClientManager automatically)
 # ------------------------------
 class Client
+  HISTORY_QUERY_CONCURRENCY = 4
+  HISTORY_QUERY_SLOTS       = Channel(Nil).new(HISTORY_QUERY_CONCURRENCY)
+  HISTORY_QUERY_CONCURRENCY.times { HISTORY_QUERY_SLOTS.send(nil) }
+
   getter ws : HTTP::WebSocket
   getter subscriptions = Hash(String, Nostr::Subscription).new
   @closed = Atomic(Int32).new(0)
@@ -207,8 +233,7 @@ class Client
   def close
     return unless @closed.swap(1) == 0
     subscriptions.each_value do |sub|
-      sub.channel.close
-      sub.eose_channel.close
+      sub.cancel
     end
     subscriptions.clear
     ClientManager.remove(self)
@@ -216,8 +241,7 @@ class Client
 
   def subscribe(id : String, filters : Array(Nostr::Filter))
     subscriptions[id]?.try do |old_sub|
-      old_sub.channel.close
-      old_sub.eose_channel.close
+      old_sub.cancel
     end
     channel = Channel(Nostr::Event).new(100)
     eose_channel = Channel(Nil).new(1)
@@ -227,26 +251,33 @@ class Client
     # Dedicated sender fiber for this subscription
     spawn send_events(sub)
 
-    # Query execution fiber
-    spawn do
-      begin
-        DB.query(filters) do |event|
-          begin
-            channel.send(event)
-          rescue Channel::ClosedError
-            break
-          end
-        end
-        # All events sent to channel, signal EOSE
-        begin
-          eose_channel.send(nil)
-        rescue Channel::ClosedError
-        end
-      rescue ex
-        Log.error { "Subscribe query error: #{ex.message}" }
-        Log.error { ex.backtrace.join("\n") }
-      end
+    # Query execution fiber. Waiting queries can be cancelled immediately when
+    # a subscription is replaced, closed, or its client disconnects.
+    spawn query_history(sub)
+  end
+
+  private def query_history(sub : Nostr::Subscription)
+    acquired_slot = false
+    select
+    when HISTORY_QUERY_SLOTS.receive
+      acquired_slot = true
+    when sub.cancel_channel.receive?
+      return
     end
+
+    return unless sub.active?
+    DB.query(sub.filters) do |event|
+      break unless sub.active?
+      sub.channel.send(event)
+    end
+    sub.eose_channel.send(nil) if sub.active?
+  rescue Channel::ClosedError
+    # Normal termination (subscription replaced, closed, or disconnected)
+  rescue ex
+    Log.error { "Subscribe query error: #{ex.message}" }
+    Log.error { ex.backtrace.join("\n") }
+  ensure
+    HISTORY_QUERY_SLOTS.send(nil) if acquired_slot
   end
 
   private def send_events(sub : Nostr::Subscription)
@@ -277,8 +308,7 @@ class Client
 
   def unsubscribe(id : String)
     subscriptions.delete(id).try do |sub|
-      sub.channel.close
-      sub.eose_channel.close
+      sub.cancel
     end
   end
 
