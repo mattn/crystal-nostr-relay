@@ -11,7 +11,7 @@ RELAY_INFO = {
   pubkey:          ENV["RELAY_PUBKEY"]? || "",
   contact:         ENV["RELAY_CONTACT"]? || "",
   icon:            ENV["RELAY_ICON"]? || "",
-  supported_nips:  [1, 4, 9, 11, 26, 40, 45, 66, 70, 78],
+  supported_nips:  [1, 4, 9, 11, 17, 26, 40, 42, 45, 59, 66, 70, 78],
   relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
   software:        "https://github.com/mattn/crystal-nostr-relay",
   version:         "0.1.0",
@@ -100,9 +100,15 @@ rescue
 end
 
 websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
-  client = Client.new(ws)
+  relay_url = ENV["RELAY_URL"]? || begin
+    host = ctx.request.headers["X-Forwarded-Host"]? || ctx.request.headers["Host"]? || ""
+    scheme = ctx.request.headers["X-Forwarded-Proto"]? == "http" ? "ws" : "wss"
+    "#{scheme}://#{host.split(',').first.strip}"
+  end
+  client = Client.new(ws, relay_url)
   client_ip = extract_forwarded_ip(ctx.request)
   Log.info { "[#{client_ip}] Client connected" }
+  ws.send(["AUTH", client.challenge].to_json)
 
   ws.on_message do |message|
     client.touch
@@ -116,12 +122,14 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
           # NIP-26: reject events carrying an invalid delegation tag
           if !data.event.valid_delegation?
             ws.send %(["OK","#{data.event.id}",false,"invalid: delegation"])
+          elsif data.event.tags.any? { |tag| tag[0]? == "-" } && !client.authorized_to_publish?(data.event)
+            ws.send %(["OK","#{data.event.id}",false,"auth-required: this event may only be published by its author"])
           elsif data.event.kind == 5
             # Handle kind 5 (deletion) separately
             DB.delete_events(data.event)
             ws.send %(["OK","#{data.event.id}",true,""])
           else
-            saved, message = DB.save(data.event)
+            saved, message = DB.save(data.event, client.authenticated_pubkeys)
             if saved
               ClientManager.broadcast(data.event)
               ws.send %(["OK","#{data.event.id}",true,""])
@@ -135,8 +143,11 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
       when Nostr::RequestMessage
         client.subscribe(data.sub_id, data.filters)
       when Nostr::CountMessage
-        count = DB.count(data.filters)
+        count = client.count(data.filters)
         ws.send %(["COUNT","#{data.sub_id}",{"count":#{count}}])
+      when Nostr::AuthMessage
+        success, message = client.authenticate(data.event)
+        ws.send(["OK", data.event.id, success, message].to_json)
       when Nostr::CloseMessage
         client.unsubscribe(data.sub_id)
       else
