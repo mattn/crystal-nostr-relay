@@ -50,7 +50,7 @@ module DB
   puts "Database setup completed successfully"
 
   # Save event
-  def self.save(event : Nostr::Event) : {Bool, String}
+  def self.save(event : Nostr::Event, authenticated_pubkeys = Set(String).new) : {Bool, String}
     POOL.transaction do |tx|
       conn = tx.connection
 
@@ -77,7 +77,7 @@ module DB
 
       # NIP-70: Check if any tag name contains a hyphen
       contains_hyphen_tag = event.tags.any? { |tag| tag[0]? && tag[0].includes?("-") }
-      if contains_hyphen_tag
+      if contains_hyphen_tag && !authenticated_pubkeys.includes?(event.pubkey)
         # This event has tags with hyphens, return false to trigger auth-required message
         return {false, "auth-required: this event may only be published by its author"}
       end
@@ -182,10 +182,10 @@ module DB
   end
 
   # Return matched events (limit)
-  def self.query(filters : Array(Nostr::Filter), &block : Nostr::Event ->)
+  def self.query(filters : Array(Nostr::Filter), authenticated_pubkeys : Set(String), &block : Nostr::Event ->)
     # Match any filter (OR condition)
     filters.each do |filter|
-      sql, args = build_query(filter)
+      sql, args = build_query(filter, authenticated_pubkeys)
       POOL.query(sql, args: args) do |rs|
         rs.each do
           event = Nostr::Event.from_json(rs.read(String))
@@ -200,11 +200,11 @@ module DB
   end
 
   # Count matched events
-  def self.count(filters : Array(Nostr::Filter)) : Int64
+  def self.count(filters : Array(Nostr::Filter), authenticated_pubkeys : Set(String)) : Int64
     total = 0i64
     # Match any filter (OR condition)
     filters.each do |filter|
-      sql, args = build_count_query(filter)
+      sql, args = build_count_query(filter, authenticated_pubkeys)
       result = POOL.query_one(sql, args: args, as: Int64)
       total += result
     end
@@ -212,7 +212,7 @@ module DB
   end
 
   # Build SQL query for counting
-  private def self.build_count_query(filter : Nostr::Filter) : {String, Array(::DB::Any)}
+  private def self.build_count_query(filter : Nostr::Filter, authenticated_pubkeys : Set(String)) : {String, Array(::DB::Any)}
     conditions = [] of String
     args = [] of ::DB::Any
     arg_counter = 0
@@ -282,6 +282,16 @@ module DB
         "$#{arg_counter += 1}"
       end.join(", ")
       conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+    end
+
+    if authenticated_pubkeys.empty?
+      conditions << "kind <> 1059"
+    else
+      placeholders = authenticated_pubkeys.map do |pubkey|
+        args << pubkey
+        "$#{arg_counter += 1}"
+      end.join(", ")
+      conditions << "(kind <> 1059 OR EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE tag->>0 = 'p' AND tag->>1 IN (#{placeholders})))"
     end
 
     # WHERE clause (default to true if empty)
@@ -298,7 +308,7 @@ module DB
   end
 
   # Build SQL query for a single filter
-  private def self.build_query(filter : Nostr::Filter) : {String, Array(::DB::Any)}
+  private def self.build_query(filter : Nostr::Filter, authenticated_pubkeys : Set(String)) : {String, Array(::DB::Any)}
     conditions = [] of String
     args = [] of ::DB::Any
     arg_counter = 0
@@ -368,6 +378,16 @@ module DB
         "$#{arg_counter += 1}"
       end.join(", ")
       conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+    end
+
+    if authenticated_pubkeys.empty?
+      conditions << "kind <> 1059"
+    else
+      placeholders = authenticated_pubkeys.map do |pubkey|
+        args << pubkey
+        "$#{arg_counter += 1}"
+      end.join(", ")
+      conditions << "(kind <> 1059 OR EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE tag->>0 = 'p' AND tag->>1 IN (#{placeholders})))"
     end
 
     # WHERE clause (default to true if empty)

@@ -2,6 +2,8 @@ require "http/server"
 require "http/web_socket"
 require "json"
 require "digest/sha256"
+require "random/secure"
+require "set"
 
 require "./db"
 require "./delegation"
@@ -143,6 +145,7 @@ module Nostr
   record RequestMessage, sub_id : String, filters : Array(Filter)
   record CountMessage, sub_id : String, filters : Array(Filter)
   record CloseMessage, sub_id : String
+  record AuthMessage, event : Event
 
   class Subscription
     getter sub_id : String
@@ -167,7 +170,7 @@ module Nostr
     end
   end
 
-  alias RelayMessage = EventMessage | RequestMessage | CountMessage | CloseMessage | JSON::PullParser::Kind
+  alias RelayMessage = EventMessage | RequestMessage | CountMessage | CloseMessage | AuthMessage | JSON::PullParser::Kind
 
   def self.parse(json : String) : RelayMessage
     pull = JSON::PullParser.new(json)
@@ -198,6 +201,10 @@ module Nostr
       reason = pull.read_string
       pull.read_end_array
       return CloseMessage.new(reason)
+    when "AUTH"
+      event = Event.from_json(pull.read_raw)
+      pull.read_end_array
+      return AuthMessage.new(event)
     else
       raise "unknown message: #{tag}"
     end
@@ -214,12 +221,33 @@ class Client
 
   getter ws : HTTP::WebSocket
   getter subscriptions = Hash(String, Nostr::Subscription).new
+  getter authenticated_pubkeys = Set(String).new
+  getter challenge = Random::Secure.hex(32)
   @closed = Atomic(Int32).new(0)
   @last_seen : Time
 
-  def initialize(@ws)
+  def initialize(@ws, @relay_url : String)
     @last_seen = Time.utc
     ClientManager.add(self)
+  end
+
+  def authenticate(event : Nostr::Event) : {Bool, String}
+    return {false, "invalid: authentication event must be kind 22242"} unless event.kind == 22242
+    return {false, "invalid: authentication event timestamp is out of range"} unless (Time.utc.to_unix - event.created_at).abs <= 600
+    return {false, "invalid: authentication challenge does not match"} unless event.tags.any? { |t| t[0]? == "challenge" && t[1]? == challenge }
+    expected = @relay_url.downcase.rstrip('/')
+    return {false, "invalid: authentication relay does not match"} unless event.tags.any? { |t| t[0]? == "relay" && t[1]?.try(&.downcase.rstrip('/')) == expected }
+    return {false, "invalid: authentication signature verification failed"} unless event.valid?
+    authenticated_pubkeys.add(event.pubkey)
+    {true, ""}
+  end
+
+  def authorized_to_publish?(event : Nostr::Event) : Bool
+    authenticated_pubkeys.includes?(event.pubkey)
+  end
+
+  def count(filters : Array(Nostr::Filter)) : Int64
+    DB.count(filters, authenticated_pubkeys)
   end
 
   def touch
@@ -266,7 +294,7 @@ class Client
     end
 
     return unless sub.active?
-    DB.query(sub.filters) do |event|
+    DB.query(sub.filters, authenticated_pubkeys) do |event|
       break unless sub.active?
       sub.channel.send(event)
     end
@@ -313,6 +341,9 @@ class Client
   end
 
   def broadcast_event(event : Nostr::Event)
+    if event.kind == 1059 && !event.p_tags.any? { |pubkey| authenticated_pubkeys.includes?(pubkey) }
+      return
+    end
     subscriptions.each_value do |sub|
       next unless sub.filters.any?(&.matches?(event))
       select
