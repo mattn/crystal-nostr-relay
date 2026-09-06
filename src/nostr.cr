@@ -94,6 +94,7 @@ module Nostr
     @[JSON::Field(key: "until")]
     getter until_ : Int64?
     getter limit : Int32?
+    getter search : String?
 
     @[JSON::Field(key: "#e")]
     getter e : Array(String)?
@@ -108,6 +109,17 @@ module Nostr
         if k.to_s.starts_with?("#") && v.is_a?(Array(String))
           generic[k.to_s] = v
         end
+      end
+    end
+
+    # NIP-50: split the search string into words. An event matches when every
+    # word occurs in its content, which is also what the database query asks
+    # for, so stored and live results agree.
+    def search_words : Array(String)
+      if search = self.search
+        search.split(/\s+/).reject(&.empty?)
+      else
+        [] of String
       end
     end
 
@@ -126,6 +138,10 @@ module Nostr
       end
       if until_ = self.until_
         return false if event.created_at > until_
+      end
+      # NIP-50: every word of the search string must occur in the content
+      search_words.each do |word|
+        return false unless event.content.downcase.includes?(word.downcase)
       end
       if e = self.e
         return false unless event.tags.any? { |t| t[0]? == "e" && e.includes?(t[1]?) }
