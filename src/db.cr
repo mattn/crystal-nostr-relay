@@ -212,6 +212,11 @@ module DB
   end
 
   # Build SQL query for counting
+  # Escape the LIKE wildcards so a search for '%' cannot match everything.
+  private def self.escape_like(word : String) : String
+    word.gsub("\\", "\\\\").gsub("%", "\\%").gsub("_", "\\_")
+  end
+
   private def self.build_count_query(filter : Nostr::Filter, authenticated_pubkeys : Set(String)) : {String, Array(::DB::Any)}
     conditions = [] of String
     args = [] of ::DB::Any
@@ -259,6 +264,12 @@ module DB
     if until_ = filter.until_
       args << until_
       conditions << "created_at <= $#{arg_counter += 1}"
+    end
+
+    # NIP-50: every word of the search string must occur in the content
+    filter.search_words.each do |word|
+      args << "%#{escape_like(word)}%"
+      conditions << "content ILIKE $#{arg_counter += 1}"
     end
 
     # #e and #p => tagvalues @> ARRAY[...]
@@ -355,6 +366,12 @@ module DB
     if until_ = filter.until_
       args << until_
       conditions << "created_at <= $#{arg_counter += 1}"
+    end
+
+    # NIP-50: every word of the search string must occur in the content
+    filter.search_words.each do |word|
+      args << "%#{escape_like(word)}%"
+      conditions << "content ILIKE $#{arg_counter += 1}"
     end
 
     # #e and #p => tagvalues @> ARRAY[...]
