@@ -3,6 +3,7 @@ require "http/web_socket"
 require "json"
 require "log"
 require "./nostr"
+require "./websocket_limit"
 
 # NIP-11 Relay Information
 RELAY_INFO = {
@@ -15,6 +16,7 @@ RELAY_INFO = {
   relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
   software:        "https://github.com/mattn/crystal-nostr-relay",
   version:         "0.1.0",
+  limitation:      {max_message_length: MAX_MESSAGE_SIZE},
 }
 
 # HTTP Handler for NIP-11 and static files
