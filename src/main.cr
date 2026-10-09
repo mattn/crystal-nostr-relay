@@ -185,4 +185,14 @@ puts "Static files: http://#{address}/"
 
 ClientManager.start_reaper(Time::Span.new(minutes: 5))
 
+# Boehm GC only collects when an allocation needs more heap, so after a burst
+# of traffic the garbage it produced stays resident until the next burst. A
+# periodic full collection frees it and lets the GC hand the pages back.
+spawn do
+  loop do
+    sleep 10.seconds
+    GC.collect
+  end
+end
+
 server.listen
