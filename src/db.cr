@@ -1,6 +1,7 @@
 # src/db.cr
 require "pg"
 require "db"
+require "./pg_result_set"
 require "json"
 
 module DB
