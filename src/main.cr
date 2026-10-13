@@ -183,6 +183,6 @@ puts "Relay listening on ws://#{address}/"
 puts "NIP-11 info: http://#{address}/ (with Accept: application/nostr+json)"
 puts "Static files: http://#{address}/"
 
-ClientManager.start_reaper(Time::Span.new(minutes: 5))
+ClientManager.start_reaper(90.seconds)
 
 server.listen

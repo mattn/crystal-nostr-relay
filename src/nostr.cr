@@ -281,6 +281,10 @@ class Client
     end
     subscriptions.clear
     ClientManager.remove(self)
+    begin
+      ws.close
+    rescue IO::Error
+    end
   end
 
   def subscribe(id : String, filters : Array(Nostr::Filter))
@@ -391,10 +395,10 @@ module ClientManager
     clients_copy.each { |c| c.broadcast_event(event) }
   end
 
-  def self.start_reaper(timeout : Time::Span)
+  def self.start_reaper(timeout : Time::Span, ping_interval : Time::Span = 30.seconds)
     spawn do
       loop do
-        sleep timeout / 2
+        sleep ping_interval
 
         clients_to_reap = @@mutex.synchronize do
           @@clients.reject(&.alive?(timeout))
