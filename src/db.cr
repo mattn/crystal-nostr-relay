@@ -193,6 +193,7 @@ module DB
   def self.query(filters : Array(Nostr::Filter), authenticated_pubkeys : Set(String), &block : Nostr::Event ->)
     # Match any filter (OR condition)
     filters.each do |filter|
+      next if filter.match_nothing?
       sql, args = build_query(filter, authenticated_pubkeys)
       POOL.query(sql, args: args) do |rs|
         rs.each do
@@ -212,6 +213,7 @@ module DB
     total = 0i64
     # Match any filter (OR condition)
     filters.each do |filter|
+      next if filter.match_nothing?
       sql, args = build_count_query(filter, authenticated_pubkeys)
       result = POOL.query_one(sql, args: args, as: Int64)
       total += result

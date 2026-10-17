@@ -86,6 +86,7 @@ module Nostr
 
   struct Filter
     include JSON::Serializable
+    include JSON::Serializable::Unmapped
 
     getter ids : Array(String)?
     getter kinds : Array(Int32)?
@@ -101,6 +102,7 @@ module Nostr
     @[JSON::Field(key: "#p")]
     getter p : Array(String)?
 
+    @[JSON::Field(ignore: true)]
     property generic : Hash(String, Array(String)) = Hash(String, Array(String)).new
 
     def initialize(**args)
@@ -110,6 +112,23 @@ module Nostr
           generic[k.to_s] = v
         end
       end
+    end
+
+    # Tag filters other than #e/#p land in json_unmapped; collect them here.
+    protected def after_initialize
+      json_unmapped.each do |key, value|
+        next unless key.starts_with?("#")
+        if values = value.as_a?
+          generic[key] = values.compact_map(&.as_s?)
+        end
+      end
+    end
+
+    # NIP-01: an empty ids/authors/kinds/tag list can never be satisfied, so
+    # the filter matches nothing rather than ignoring the attribute.
+    def match_nothing? : Bool
+      [ids, authors, e, p].any? { |list| list.try(&.empty?) } ||
+        kinds.try(&.empty?) || generic.values.any?(&.empty?)
     end
 
     # NIP-50: split the search string into words. An event matches when every
@@ -124,6 +143,7 @@ module Nostr
     end
 
     def matches?(event : Event) : Bool
+      return false if match_nothing?
       if ids = self.ids
         return false unless ids.any? { |i| event.id.starts_with?(i) }
       end
