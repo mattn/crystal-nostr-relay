@@ -33,4 +33,9 @@ describe "DB.count" do
     DB.count(filters, Set(String).new).should eq(0)
     DB.count([Nostr::Filter.from_json(%({"kinds":[1]}))], Set(String).new).should be > 0
   end
+
+  it "counts an event matching several filters once" do
+    filters = [%({"ids":["#{"a" * 64}"]}), %({"authors":["#{"b" * 64}"]}), %({"#t":["nostr"]}), %({"kinds":[]})].map { |json| Nostr::Filter.from_json(json) }
+    DB.count(filters, Set(String).new).should eq(1)
+  end
 end

@@ -210,15 +210,24 @@ module DB
 
   # Count matched events
   def self.count(filters : Array(Nostr::Filter), authenticated_pubkeys : Set(String)) : Int64
-    total = 0i64
-    # Match any filter (OR condition)
+    # NIP-45: count the events matching any filter, each event once, so the
+    # filters are OR'd in a single query instead of summing per-filter counts.
+    clauses = [] of String
+    args = [] of ::DB::Any
     filters.each do |filter|
       next if filter.match_nothing?
-      sql, args = build_count_query(filter, authenticated_pubkeys)
-      result = POOL.query_one(sql, args: args, as: Int64)
-      total += result
+      where_clause, filter_args = build_count_conditions(filter, authenticated_pubkeys, args.size)
+      clauses << "(#{where_clause})"
+      args.concat(filter_args)
     end
-    total
+    return 0i64 if clauses.empty?
+
+    sql = <<-SQL
+      SELECT COUNT(*)
+      FROM event e
+      WHERE #{clauses.join(" OR ")}
+    SQL
+    POOL.query_one(sql, args: args, as: Int64)
   end
 
   # Build SQL query for counting
@@ -227,10 +236,12 @@ module DB
     word.gsub("\\", "\\\\").gsub("%", "\\%").gsub("_", "\\_")
   end
 
-  private def self.build_count_query(filter : Nostr::Filter, authenticated_pubkeys : Set(String)) : {String, Array(::DB::Any)}
+  # Placeholders are numbered from arg_offset + 1 so several filters can be
+  # combined into one query.
+  private def self.build_count_conditions(filter : Nostr::Filter, authenticated_pubkeys : Set(String), arg_offset : Int32) : {String, Array(::DB::Any)}
     conditions = [] of String
     args = [] of ::DB::Any
-    arg_counter = 0
+    arg_counter = arg_offset
 
     # ids => id LIKE 'prefix%'
     if ids = filter.ids
@@ -315,17 +326,10 @@ module DB
       conditions << "(kind <> 1059 OR EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE tag->>0 = 'p' AND tag->>1 IN (#{placeholders})))"
     end
 
-    # WHERE clause (default to true if empty)
+    # WHERE clause (default to true if empty); counting applies no limit
     where_clause = conditions.empty? ? "true" : conditions.join(" AND ")
 
-    # For counting, don't apply limit
-    sql = <<-SQL
-      SELECT COUNT(*)
-      FROM event e
-      WHERE #{where_clause}
-    SQL
-
-    {sql, args}
+    {where_clause, args}
   end
 
   # Build SQL query for a single filter
