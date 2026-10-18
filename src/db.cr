@@ -230,6 +230,32 @@ module DB
     POOL.query_one(sql, args: args, as: Int64)
   end
 
+  # The #x conditions of a filter as {tag name, values}.
+  private def self.tag_filters(filter : Nostr::Filter) : Array({String, Array(String)})
+    tags = [] of {String, Array(String)}
+    filter.e.try { |values| tags << {"e", values} }
+    filter.p.try { |values| tags << {"p", values} }
+    filter.generic.each { |key, values| tags << {key[1..], values} }
+    tags
+  end
+
+  # NIP-01: a #x condition needs a tag named x whose value is one of the
+  # given values. tagvalues only holds single-letter tag values and does not
+  # know the name, so it serves as an indexed prefilter for those, and the
+  # EXISTS check enforces the name.
+  private def self.tag_condition(name : String, values : Array(String), args : Array(::DB::Any), arg_counter : Int32) : {String, Int32}
+    placeholders = values.map do |v|
+      args << v
+      "$#{arg_counter += 1}"
+    end.join(", ")
+    values_arg = "ARRAY[#{placeholders}]::text[]"
+    args << name
+    name_arg = "$#{arg_counter += 1}"
+    condition = "EXISTS (SELECT 1 FROM jsonb_array_elements(tags) tag WHERE tag->>0 = #{name_arg} AND tag->>1 = ANY(#{values_arg}))"
+    condition = "tagvalues && #{values_arg} AND #{condition}" if name.size == 1
+    {condition, arg_counter}
+  end
+
   # Build SQL query for counting
   # Escape the LIKE wildcards so a search for '%' cannot match everything.
   private def self.escape_like(word : String) : String
@@ -293,27 +319,11 @@ module DB
       conditions << "content ILIKE $#{arg_counter += 1}"
     end
 
-    # #e and #p => tagvalues @> ARRAY[...]
-    {% for tag in ["e", "p"] %}
-      if values = filter.{{tag.id}}
-        unless values.empty?
-          placeholders = values.map do |v|
-            args << v
-            "$#{arg_counter += 1}"
-          end.join(", ")
-          conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
-        end
-      end
-    {% end %}
-
-    # Arbitrary tags (#t, #r, #challenge, etc.)
-    filter.generic.each do |key, values|
+    # Tag filters (#e, #p, #t, #challenge, ...)
+    tag_filters(filter).each do |name, values|
       next if values.empty?
-      placeholders = values.map do |v|
-        args << v
-        "$#{arg_counter += 1}"
-      end.join(", ")
-      conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+      condition, arg_counter = tag_condition(name, values, args, arg_counter)
+      conditions << condition
     end
 
     if authenticated_pubkeys.empty?
@@ -388,27 +398,11 @@ module DB
       conditions << "content ILIKE $#{arg_counter += 1}"
     end
 
-    # #e and #p => tagvalues @> ARRAY[...]
-    {% for tag in ["e", "p"] %}
-      if values = filter.{{tag.id}}
-        unless values.empty?
-          placeholders = values.map do |v|
-            args << v
-            "$#{arg_counter += 1}"
-          end.join(", ")
-          conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
-        end
-      end
-    {% end %}
-
-    # Arbitrary tags (#t, #r, #challenge, etc.)
-    filter.generic.each do |key, values|
+    # Tag filters (#e, #p, #t, #challenge, ...)
+    tag_filters(filter).each do |name, values|
       next if values.empty?
-      placeholders = values.map do |v|
-        args << v
-        "$#{arg_counter += 1}"
-      end.join(", ")
-      conditions << "tagvalues @> ARRAY[#{placeholders}]::text[]"
+      condition, arg_counter = tag_condition(name, values, args, arg_counter)
+      conditions << condition
     end
 
     if authenticated_pubkeys.empty?
