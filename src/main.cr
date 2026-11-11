@@ -3,6 +3,7 @@ require "http/web_socket"
 require "json"
 require "log"
 require "./nostr"
+require "./pow"
 require "./websocket_limit"
 
 # NIP-11 Relay Information
@@ -12,11 +13,11 @@ RELAY_INFO = {
   pubkey:          ENV["RELAY_PUBKEY"]? || "",
   contact:         ENV["RELAY_CONTACT"]? || "",
   icon:            ENV["RELAY_ICON"]? || "",
-  supported_nips:  [1, 4, 9, 11, 17, 26, 40, 42, 45, 50, 59, 66, 70, 78],
+  supported_nips:  [1, 4, 9, 11, 13, 17, 26, 40, 42, 45, 50, 59, 66, 70, 78],
   relay_countries: (ENV["RELAY_COUNTRIES"]? || "JP").split(',').map(&.strip).reject(&.empty?),
   software:        "https://github.com/mattn/crystal-nostr-relay",
   version:         "0.1.0",
-  limitation:      {max_message_length: MAX_MESSAGE_SIZE},
+  limitation:      {max_message_length: MAX_MESSAGE_SIZE, min_pow_difficulty: Nostr::Pow::MIN_DIFFICULTY},
 }
 
 # HTTP Handler for NIP-11 and static files
@@ -124,6 +125,9 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
           # NIP-26: reject events carrying an invalid delegation tag
           if !data.event.valid_delegation?
             ws.send %(["OK","#{data.event.id}",false,"invalid: delegation"])
+          elsif Nostr::Pow::MIN_DIFFICULTY > 0 && (pow = Nostr::Pow.difficulty(data.event.id)) < Nostr::Pow::MIN_DIFFICULTY
+            # NIP-13: enforce proof of work when a minimum difficulty is required
+            ws.send(["OK", data.event.id, false, "pow: difficulty #{pow} is less than #{Nostr::Pow::MIN_DIFFICULTY}"].to_json)
           elsif data.event.tags.any? { |tag| tag[0]? == "-" } && !client.authorized_to_publish?(data.event)
             ws.send %(["OK","#{data.event.id}",false,"auth-required: this event may only be published by its author"])
           elsif data.event.kind == 5
