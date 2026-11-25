@@ -222,10 +222,16 @@ module DB
     end
     return 0i64 if clauses.empty?
 
+    # NIP-40: expired events are not counted
+    args << Time.utc.to_unix
     sql = <<-SQL
       SELECT COUNT(*)
       FROM event e
-      WHERE #{clauses.join(" OR ")}
+      WHERE (#{clauses.join(" OR ")})
+        AND NOT (e.tags @> '[["expiration"]]' AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(e.tags) tag
+          WHERE tag->>0 = 'expiration'
+            AND CASE WHEN tag->>1 ~ '^[0-9]{1,18}$' THEN (tag->>1)::bigint END <= $#{args.size}))
     SQL
     POOL.query_one(sql, args: args, as: Int64)
   end

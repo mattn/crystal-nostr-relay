@@ -130,6 +130,9 @@ websocket_handler = HTTP::WebSocketHandler.new() do |ws, ctx|
             ws.send(["OK", data.event.id, false, "pow: difficulty #{pow} is less than #{Nostr::Pow::MIN_DIFFICULTY}"].to_json)
           elsif data.event.tags.any? { |tag| tag[0]? == "-" } && !client.authorized_to_publish?(data.event)
             ws.send %(["OK","#{data.event.id}",false,"auth-required: this event may only be published by its author"])
+          elsif data.event.expired?
+            # NIP-40: an event that has already expired is not accepted
+            ws.send %(["OK","#{data.event.id}",false,"invalid: event has expired"])
           elsif data.event.kind == 5
             # Handle kind 5 (deletion) separately
             DB.delete_events(data.event)
